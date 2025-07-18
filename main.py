@@ -11,7 +11,7 @@ import os
 
 # --- 页面基础设置 ---
 st.set_page_config(
-    page_title="房产市场数据分析专业看板",
+    page_title="房产市场数据分析看板",
     page_icon="🏢",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -137,8 +137,8 @@ if uploaded_files:
 
         st.markdown("---")
 
-        # --- 专业筛选器 ---
-        st.sidebar.header("🔍 专业筛选器")
+        # --- 数据筛选器 ---
+        st.sidebar.header("🔍 数据筛选器")
         
         # 区域和商圈筛选
         if data_type == '在售房源' and '区域' in df.columns:
