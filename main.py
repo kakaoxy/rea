@@ -138,7 +138,16 @@ if uploaded_files:
         st.markdown("---")
 
         # --- 数据筛选器 ---
-        st.sidebar.header("🔍 数据筛选器")
+        st.sidebar.header("🔍 专业数据筛选器")
+        
+        # 筛选器重置按钮
+        if st.sidebar.button("🔄 重置所有筛选器", help="重置所有筛选条件到默认状态"):
+            st.rerun()
+        
+        st.sidebar.markdown("---")
+        
+        # === 地理位置筛选 ===
+        st.sidebar.subheader("📍 地理位置")
         
         # 区域和商圈筛选
         if data_type == '在售房源' and '区域' in df.columns:
@@ -158,6 +167,9 @@ if uploaded_files:
                     default=available_circles,
                     help="选择具体的商业圈"
                 )
+        
+        # === 价格和面积筛选 ===
+        st.sidebar.subheader("💰 价格与面积")
         
         # 价格区间筛选
         if '总价(万)' in df.columns and not df['总价(万)'].isna().all():
@@ -185,6 +197,9 @@ if uploaded_files:
                 )
                 min_area, max_area = area_range
         
+        # === 房屋属性筛选 ===
+        st.sidebar.subheader("🏠 房屋属性")
+        
         # 房龄筛选
         year_col = '建成年代' if '建成年代' in df.columns else '年代'
         if year_col in df.columns and not df[year_col].isna().all():
@@ -205,35 +220,150 @@ if uploaded_files:
                 max_age = current_year - selected_years[0]
                 st.sidebar.caption(f"对应房龄：{min_age}-{max_age}年")
 
+        # 户型分类筛选
+        if '户型' in df.columns:
+            # 提取户型主要类别
+            def extract_room_type(huxing):
+                if pd.isna(huxing):
+                    return '未知'
+                huxing_str = str(huxing)
+                if '1室' in huxing_str:
+                    return '1室'
+                elif '2室' in huxing_str:
+                    return '2室'
+                elif '3室' in huxing_str:
+                    return '3室'
+                elif '4室' in huxing_str:
+                    return '4室'
+                elif '5室' in huxing_str:
+                    return '5室+'
+                else:
+                    return '其他'
+            
+            df['户型分类'] = df['户型'].apply(extract_room_type)
+            room_types = sorted(df['户型分类'].unique())
+            
+            selected_room_types = st.sidebar.multiselect(
+                '🏠 选择户型',
+                options=room_types,
+                default=room_types,
+                help="选择要分析的户型类别"
+            )
+
+        # 楼层分类筛选
+        floor_col = '楼层信息' if '楼层信息' in df.columns else '楼层'
+        if floor_col in df.columns:
+            # 提取楼层分类
+            def extract_floor_type(floor_info):
+                if pd.isna(floor_info):
+                    return '未知'
+                floor_str = str(floor_info)
+                if '低楼层' in floor_str or '底层' in floor_str:
+                    return '低楼层'
+                elif '中楼层' in floor_str or '中层' in floor_str:
+                    return '中楼层'
+                elif '高楼层' in floor_str or '顶层' in floor_str:
+                    return '高楼层'
+                else:
+                    return '其他'
+            
+            df['楼层分类'] = df[floor_col].apply(extract_floor_type)
+            floor_types = sorted(df['楼层分类'].unique())
+            
+            selected_floor_types = st.sidebar.multiselect(
+                '🏢 选择楼层',
+                options=floor_types,
+                default=floor_types,
+                help="选择要分析的楼层类别"
+            )
+
+        # 装修状况筛选
+        if '装修' in df.columns:
+            decoration_types = sorted(df['装修'].dropna().unique())
+            if len(decoration_types) > 0:
+                selected_decorations = st.sidebar.multiselect(
+                    '🎨 选择装修状况',
+                    options=decoration_types,
+                    default=decoration_types,
+                    help="选择要分析的装修状况"
+                )
+
         # 应用筛选条件
         filtered_df = df.copy()
         
+        # 区域和商圈筛选
         if data_type == '在售房源' and '区域' in df.columns:
             filtered_df = filtered_df[filtered_df['区域'].isin(selected_districts)]
             if '商圈' in df.columns and 'selected_circles' in locals():
                 filtered_df = filtered_df[filtered_df['商圈'].isin(selected_circles)]
         
+        # 价格筛选
         if '总价(万)' in df.columns and 'min_price' in locals():
             filtered_df = filtered_df[
                 (filtered_df['总价(万)'] >= min_price) &
                 (filtered_df['总价(万)'] <= max_price)
             ]
         
+        # 面积筛选
         if '面积(㎡)' in df.columns and 'min_area' in locals():
             filtered_df = filtered_df[
                 (filtered_df['面积(㎡)'] >= min_area) &
                 (filtered_df['面积(㎡)'] <= max_area)
             ]
         
+        # 房龄筛选
         if year_col in df.columns and 'selected_years' in locals():
             filtered_df = filtered_df[
                 (filtered_df[year_col] >= selected_years[0]) &
                 (filtered_df[year_col] <= selected_years[1])
             ]
         
+        # 户型筛选
+        if '户型' in df.columns and 'selected_room_types' in locals():
+            filtered_df = filtered_df[filtered_df['户型分类'].isin(selected_room_types)]
+        
+        # 楼层筛选
+        if floor_col in df.columns and 'selected_floor_types' in locals():
+            filtered_df = filtered_df[filtered_df['楼层分类'].isin(selected_floor_types)]
+        
+        # 装修状况筛选
+        if '装修' in df.columns and 'selected_decorations' in locals():
+            filtered_df = filtered_df[filtered_df['装修'].isin(selected_decorations)]
+        
         # 筛选结果提示
         filter_ratio = len(filtered_df) / len(df) * 100
-        st.sidebar.success(f"✅ 筛选完成：{len(filtered_df):,}条数据 ({filter_ratio:.1f}%)")
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 筛选结果")
+        
+        # 详细筛选摘要
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            st.metric("筛选后数据", f"{len(filtered_df):,}条")
+        with col2:
+            st.metric("筛选比例", f"{filter_ratio:.1f}%")
+        
+        # 筛选条件摘要
+        active_filters = []
+        if data_type == '在售房源' and '区域' in df.columns and 'selected_districts' in locals():
+            if len(selected_districts) < len(df['区域'].unique()):
+                active_filters.append(f"区域: {len(selected_districts)}个")
+        
+        if '户型' in df.columns and 'selected_room_types' in locals():
+            if len(selected_room_types) < len(df['户型分类'].unique()):
+                active_filters.append(f"户型: {len(selected_room_types)}类")
+        
+        if floor_col in df.columns and 'selected_floor_types' in locals():
+            if len(selected_floor_types) < len(df['楼层分类'].unique()):
+                active_filters.append(f"楼层: {len(selected_floor_types)}类")
+        
+        if '装修' in df.columns and 'selected_decorations' in locals():
+            if len(selected_decorations) < len(df['装修'].dropna().unique()):
+                active_filters.append(f"装修: {len(selected_decorations)}类")
+        
+        if active_filters:
+            st.sidebar.info("🔍 活跃筛选器:\n" + "\n".join([f"• {f}" for f in active_filters]))
+        else:
+            st.sidebar.success("✅ 显示全部数据")
         
         if len(filtered_df) == 0:
             st.warning("⚠️ 当前筛选条件下没有数据，请调整筛选条件")
@@ -750,6 +880,39 @@ if uploaded_files:
             
             insights = []
             
+            # 基于筛选条件的洞察
+            if active_filters:
+                insights.append("🔸 当前分析基于筛选条件，结果更具针对性")
+                
+                # 户型筛选洞察
+                if '户型' in df.columns and 'selected_room_types' in locals():
+                    if len(selected_room_types) == 1:
+                        insights.append(f"🔸 专注分析{selected_room_types[0]}户型，数据更精准")
+                    elif len(selected_room_types) < len(df['户型分类'].unique()):
+                        insights.append(f"🔸 对比分析{len(selected_room_types)}种户型，便于横向比较")
+                
+                # 楼层筛选洞察
+                if floor_col in df.columns and 'selected_floor_types' in locals():
+                    if len(selected_floor_types) == 1:
+                        floor_type = selected_floor_types[0]
+                        if floor_type == '高楼层':
+                            insights.append("🔸 高楼层房源通常视野好、采光佳，但价格相对较高")
+                        elif floor_type == '低楼层':
+                            insights.append("🔸 低楼层房源出行便利，适合老人居住，价格相对实惠")
+                        elif floor_type == '中楼层':
+                            insights.append("🔸 中楼层房源平衡了价格和居住体验，是热门选择")
+                
+                # 装修筛选洞察
+                if '装修' in df.columns and 'selected_decorations' in locals():
+                    if len(selected_decorations) == 1:
+                        decoration = selected_decorations[0]
+                        if decoration == '精装':
+                            insights.append("🔸 精装房源即买即住，但总价较高，适合追求便利的购房者")
+                        elif decoration == '简装':
+                            insights.append("🔸 简装房源价格适中，可根据个人喜好再装修")
+                        elif decoration == '毛坯':
+                            insights.append("🔸 毛坯房源价格最低，但需要额外装修成本和时间")
+            
             # 价格洞察
             if price_stats:
                 if price_stats['std'] / price_stats['mean'] > 0.3:
@@ -828,6 +991,33 @@ if uploaded_files:
             st.subheader("💡 专业投资建议")
             
             recommendations = []
+            
+            # 基于筛选条件的投资建议
+            if active_filters:
+                recommendations.append("🔹 基于当前筛选条件的专业建议：")
+                
+                # 户型筛选建议
+                if '户型' in df.columns and 'selected_room_types' in locals():
+                    if '1室' in selected_room_types and len(selected_room_types) == 1:
+                        recommendations.append("🔹 1室户型投资回报率高，适合出租给单身白领")
+                    elif '2室' in selected_room_types and len(selected_room_types) == 1:
+                        recommendations.append("🔹 2室户型需求稳定，适合小家庭和情侣租住")
+                    elif '3室' in selected_room_types and len(selected_room_types) == 1:
+                        recommendations.append("🔹 3室户型适合三口之家，保值性好，转手容易")
+                
+                # 楼层筛选建议
+                if floor_col in df.columns and 'selected_floor_types' in locals():
+                    if '高楼层' in selected_floor_types and len(selected_floor_types) == 1:
+                        recommendations.append("🔹 高楼层房源溢价明显，但要注意电梯维护成本")
+                    elif '低楼层' in selected_floor_types and len(selected_floor_types) == 1:
+                        recommendations.append("🔹 低楼层房源性价比高，适合预算有限的首次购房者")
+                
+                # 装修筛选建议
+                if '装修' in df.columns and 'selected_decorations' in locals():
+                    if '毛坯' in selected_decorations and len(selected_decorations) == 1:
+                        recommendations.append("🔹 毛坯房总价低，但需预留10-20万装修预算")
+                    elif '精装' in selected_decorations and len(selected_decorations) == 1:
+                        recommendations.append("🔹 精装房即买即住，适合工作繁忙的购房者")
             
             if data_type == '在售房源':
                 # 基于价格分布的建议
