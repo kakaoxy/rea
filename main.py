@@ -1,4 +1,4 @@
-# 房产数据分析专业看板
+# 房产数据分析看板
 
 import streamlit as st
 import pandas as pd
@@ -43,11 +43,56 @@ def analyze_market_segments(df, price_col, area_col):
                                       bins=[0, 50, 70, 90, 120, float('inf')], 
                                       labels=['小户型(<50㎡)', '紧凑型(50-70㎡)', '标准型(70-90㎡)', '舒适型(90-120㎡)', '大户型(>120㎡)'])
             
-            # 按总价分段
-            price_quantiles = valid_data[price_col].quantile([0.33, 0.67])
-            valid_data['价格段'] = pd.cut(valid_data[price_col], 
-                                      bins=[0, price_quantiles.iloc[0], price_quantiles.iloc[1], float('inf')], 
-                                      labels=['经济型', '中端型', '高端型'])
+            # 按总价分段 - 修复重复边界问题
+            try:
+                price_quantiles = valid_data[price_col].quantile([0.33, 0.67])
+                q1, q3 = price_quantiles.iloc[0], price_quantiles.iloc[1]
+                
+                # 检查是否有重复的边界值
+                if q1 == q3 or q1 == 0:
+                    # 如果有重复值或第一个分位数为0，使用固定分段
+                    min_price = valid_data[price_col].min()
+                    max_price = valid_data[price_col].max()
+                    price_range = max_price - min_price
+                    
+                    # 确保分段有意义
+                    if price_range > 0:
+                        third = price_range / 3
+                        bins = [min_price, min_price + third, min_price + 2*third, max_price + 0.1]
+                    else:
+                        # 如果价格范围为0，创建一个简单的两段分类
+                        bins = [min_price - 0.1, min_price, min_price + 0.1]
+                        labels = ['经济型', '中端型']
+                        valid_data['价格段'] = pd.cut(valid_data[price_col], bins=bins, labels=labels)
+                        segments['price_segments'] = valid_data.groupby('价格段', observed=True)[area_col].agg(['count', 'mean', 'median']).round(2)
+                        segments['area_segments'] = valid_data.groupby('面积段', observed=True)[price_col].agg(['count', 'mean', 'median']).round(2)
+                        segments['data'] = valid_data
+                        return segments
+                else:
+                    bins = [0, q1, q3, float('inf')]
+                
+                valid_data['价格段'] = pd.cut(valid_data[price_col], 
+                                          bins=bins, 
+                                          labels=['经济型', '中端型', '高端型'])
+            except Exception as e:
+                # 如果分段失败，使用简单的三等分
+                try:
+                    min_price = valid_data[price_col].min()
+                    max_price = valid_data[price_col].max()
+                    price_range = max_price - min_price
+                    
+                    if price_range > 0:
+                        third = price_range / 3
+                        bins = [min_price, min_price + third, min_price + 2*third, max_price + 0.1]
+                        valid_data['价格段'] = pd.cut(valid_data[price_col], 
+                                              bins=bins, 
+                                              labels=['经济型', '中端型', '高端型'])
+                    else:
+                        # 如果所有价格相同，只创建一个类别
+                        valid_data['价格段'] = '中端型'
+                except:
+                    # 最后的备选方案：跳过价格分段
+                    valid_data['价格段'] = '未分类'
             
             segments['area_segments'] = valid_data.groupby('面积段', observed=True)[price_col].agg(['count', 'mean', 'median']).round(2)
             segments['price_segments'] = valid_data.groupby('价格段', observed=True)[area_col].agg(['count', 'mean', 'median']).round(2)
@@ -109,7 +154,7 @@ if uploaded_files:
         df.dropna(how='all', inplace=True)
 
         # --- 主页面标题 ---
-        st.title("🏢 房产市场数据分析专业报告")
+        st.title("🏢 房产市场数据分析报告")
         
         # 数据概览卡片
         col1, col2, col3, col4 = st.columns(4)
@@ -138,7 +183,7 @@ if uploaded_files:
         st.markdown("---")
 
         # --- 数据筛选器 ---
-        st.sidebar.header("🔍 专业数据筛选器")
+        st.sidebar.header("🔍 数据筛选器")
         
         # 筛选器重置按钮
         if st.sidebar.button("🔄 重置所有筛选器", help="重置所有筛选条件到默认状态"):
@@ -431,8 +476,8 @@ if uploaded_files:
 
         st.markdown("---")
 
-        # --- 专业图表分析 ---
-        st.header("📊 专业市场分析图表")
+        # --- 图表分析 ---
+        st.header("📊 市场分析图表")
         
         # 第一行图表
         col1, col2 = st.columns(2)
@@ -835,6 +880,236 @@ if uploaded_files:
                         
                         st.plotly_chart(fig_discount, use_container_width=True)
 
+        # --- 小区排行榜 ---
+        if data_type == '成交房源' and '小区名称' in filtered_df.columns:
+            st.markdown("---")
+            st.header("🏆 小区排行榜")
+            
+            # 排行榜控制选项
+            ranking_col1, ranking_col2, ranking_col3 = st.columns(3)
+            
+            with ranking_col1:
+                ranking_metric = st.selectbox(
+                    "排序维度",
+                    ["成交量", "成交均价", "成交总价", "成交周期"],
+                    help="选择小区排行的评判标准"
+                )
+            
+            with ranking_col2:
+                top_n = st.selectbox(
+                    "显示数量",
+                    [10, 20, 30, 50],
+                    help="选择显示排行榜前N名"
+                )
+            
+            with ranking_col3:
+                sort_order = st.selectbox(
+                    "排序方式",
+                    ["从高到低", "从低到高"],
+                    help="选择排序顺序"
+                )
+            
+            # 计算小区统计数据
+            try:
+                community_stats = filtered_df.groupby('小区名称').agg({
+                    '总价(万)': ['count', 'mean', 'sum'],
+                    '单价(元/平)': 'mean' if '单价(元/平)' in filtered_df.columns else lambda x: None,
+                    '面积(㎡)': 'mean',
+                    '成交周期(天)': 'mean' if '成交周期(天)' in filtered_df.columns else lambda x: None
+                }).round(2)
+                
+                # 重命名列
+                if '成交周期(天)' in filtered_df.columns and '单价(元/平)' in filtered_df.columns:
+                    community_stats.columns = ['成交套数', '平均总价', '总成交额', '平均单价', '平均面积', '平均成交周期']
+                elif '单价(元/平)' in filtered_df.columns:
+                    community_stats.columns = ['成交套数', '平均总价', '总成交额', '平均单价', '平均面积']
+                    community_stats['平均成交周期'] = None
+                elif '成交周期(天)' in filtered_df.columns:
+                    community_stats.columns = ['成交套数', '平均总价', '总成交额', '平均面积', '平均成交周期']
+                    community_stats['平均单价'] = None
+                else:
+                    community_stats.columns = ['成交套数', '平均总价', '总成交额', '平均面积']
+                    community_stats['平均单价'] = None
+                    community_stats['平均成交周期'] = None
+                
+                community_stats = community_stats.reset_index()
+                
+                # 过滤掉成交套数少于3套的小区（避免数据不具代表性）
+                community_stats = community_stats[community_stats['成交套数'] >= 3]
+                
+                if len(community_stats) > 0:
+                    # 根据选择的维度排序
+                    if ranking_metric == "成交量":
+                        sort_col = '成交套数'
+                        metric_unit = '套'
+                        metric_desc = '成交套数越多，说明小区越受欢迎'
+                    elif ranking_metric == "成交均价":
+                        if '平均单价' in community_stats.columns and community_stats['平均单价'].notna().any():
+                            sort_col = '平均单价'
+                            metric_unit = '元/㎡'
+                            metric_desc = '单价越高，说明小区品质和地段越好'
+                        else:
+                            st.warning("当前数据中没有单价信息，改为按成交量排序")
+                            sort_col = '成交套数'
+                            metric_unit = '套'
+                            metric_desc = '成交套数越多，说明小区越受欢迎'
+                    elif ranking_metric == "成交总价":
+                        sort_col = '平均总价'
+                        metric_unit = '万元'
+                        metric_desc = '总价越高，说明小区房源价值越高'
+                    elif ranking_metric == "成交周期":
+                        if '平均成交周期' in community_stats.columns and community_stats['平均成交周期'].notna().any():
+                            sort_col = '平均成交周期'
+                            metric_unit = '天'
+                            metric_desc = '成交周期越短，说明小区房源越好卖'
+                        else:
+                            st.warning("当前数据中没有成交周期信息，改为按成交量排序")
+                            sort_col = '成交套数'
+                            metric_unit = '套'
+                            metric_desc = '成交套数越多，说明小区越受欢迎'
+                    
+                    # 处理成交周期为空的情况
+                    if sort_col == '平均成交周期' and community_stats['平均成交周期'].isna().all():
+                        st.warning("成交周期数据不完整，改为按成交量排序")
+                        sort_col = '成交套数'
+                        metric_unit = '套'
+                        metric_desc = '成交套数越多，说明小区越受欢迎'
+                    
+                    # 排序
+                    ascending = (sort_order == "从低到高")
+                    if sort_col == '平均成交周期':
+                        # 成交周期排序时，先过滤掉空值
+                        valid_cycle_data = community_stats.dropna(subset=[sort_col])
+                        if len(valid_cycle_data) > 0:
+                            community_ranking = valid_cycle_data.sort_values(sort_col, ascending=ascending).head(top_n)
+                        else:
+                            st.warning("没有有效的成交周期数据")
+                            community_ranking = community_stats.sort_values('成交套数', ascending=False).head(top_n)
+                    else:
+                        community_ranking = community_stats.sort_values(sort_col, ascending=ascending).head(top_n)
+                    
+                    # 显示排行榜
+                    st.subheader(f"🏆 {ranking_metric}排行榜 TOP {top_n}")
+                    st.caption(f"💡 {metric_desc}")
+                    
+                    # 创建排行榜可视化
+                    fig_ranking = go.Figure()
+                    
+                    # 添加柱状图
+                    fig_ranking.add_trace(go.Bar(
+                        y=community_ranking['小区名称'][::-1],  # 反转顺序，让第一名在顶部
+                        x=community_ranking[sort_col][::-1],
+                        orientation='h',
+                        text=[f"{val:.0f}{metric_unit}" if not pd.isna(val) else "N/A" 
+                              for val in community_ranking[sort_col][::-1]],
+                        textposition='auto',
+                        marker=dict(
+                            color=community_ranking[sort_col][::-1],
+                            colorscale='Viridis',
+                            showscale=True,
+                            colorbar=dict(title=f"{ranking_metric}({metric_unit})")
+                        )
+                    ))
+                    
+                    fig_ranking.update_layout(
+                        title=f"{ranking_metric}排行榜",
+                        xaxis_title=f"{ranking_metric} ({metric_unit})",
+                        yaxis_title="小区名称",
+                        height=max(400, len(community_ranking) * 25),
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_ranking, use_container_width=True)
+                    
+                    # 显示详细排行榜表格
+                    st.subheader("📋 详细排行榜数据")
+                    
+                    # 添加排名列
+                    ranking_display = community_ranking.copy()
+                    ranking_display.insert(0, '排名', range(1, len(ranking_display) + 1))
+                    
+                    # 格式化数值显示
+                    if '平均单价' in ranking_display.columns:
+                        ranking_display['平均单价'] = ranking_display['平均单价'].apply(lambda x: f"{x:,.0f}" if not pd.isna(x) else "N/A")
+                    ranking_display['平均总价'] = ranking_display['平均总价'].apply(lambda x: f"{x:.1f}" if not pd.isna(x) else "N/A")
+                    ranking_display['总成交额'] = ranking_display['总成交额'].apply(lambda x: f"{x:.1f}" if not pd.isna(x) else "N/A")
+                    ranking_display['平均面积'] = ranking_display['平均面积'].apply(lambda x: f"{x:.1f}" if not pd.isna(x) else "N/A")
+                    if '平均成交周期' in ranking_display.columns:
+                        ranking_display['平均成交周期'] = ranking_display['平均成交周期'].apply(lambda x: f"{x:.0f}" if not pd.isna(x) else "N/A")
+                    
+                    # 重命名列以便显示
+                    display_columns = {
+                        '排名': '排名',
+                        '小区名称': '小区名称',
+                        '成交套数': '成交套数',
+                        '平均单价': '平均单价(元/㎡)',
+                        '平均总价': '平均总价(万)',
+                        '总成交额': '总成交额(万)',
+                        '平均面积': '平均面积(㎡)'
+                    }
+                    
+                    if '平均成交周期' in ranking_display.columns:
+                        display_columns['平均成交周期'] = '平均成交周期(天)'
+                    
+                    ranking_display = ranking_display.rename(columns=display_columns)
+                    
+                    # 高亮显示前三名
+                    def highlight_top3(row):
+                        if row['排名'] == 1:
+                            return ['background-color: #FFD700'] * len(row)  # 金色
+                        elif row['排名'] == 2:
+                            return ['background-color: #C0C0C0'] * len(row)  # 银色
+                        elif row['排名'] == 3:
+                            return ['background-color: #CD7F32'] * len(row)  # 铜色
+                        else:
+                            return [''] * len(row)
+                    
+                    styled_ranking = ranking_display.style.apply(highlight_top3, axis=1)
+                    st.dataframe(styled_ranking, use_container_width=True)
+                    
+                    # 排行榜洞察
+                    st.subheader("💡 排行榜洞察")
+                    
+                    insights = []
+                    
+                    if len(community_ranking) > 0:
+                        top1 = community_ranking.iloc[0]
+                        top1_value = top1[sort_col]
+                        
+                        if ranking_metric == "成交量":
+                            insights.append(f"🥇 **{top1['小区名称']}** 以 **{top1_value:.0f}套** 成交量位居榜首，是最受欢迎的小区")
+                            if len(community_ranking) > 1:
+                                avg_volume = community_ranking['成交套数'].mean()
+                                insights.append(f"📊 榜单小区平均成交量为 **{avg_volume:.1f}套**，显示了活跃的交易市场")
+                        
+                        elif ranking_metric == "成交均价":
+                            insights.append(f"🥇 **{top1['小区名称']}** 以 **{top1_value:,.0f}元/㎡** 的均价位居榜首，是区域内的高端小区")
+                            if len(community_ranking) > 1:
+                                price_range = community_ranking['平均单价'].max() - community_ranking['平均单价'].min()
+                                insights.append(f"💰 榜单小区价格差距为 **{price_range:,.0f}元/㎡**，显示了明显的品质分层")
+                        
+                        elif ranking_metric == "成交总价":
+                            insights.append(f"🥇 **{top1['小区名称']}** 以 **{top1_value:.1f}万元** 的均价位居榜首，房源价值最高")
+                            avg_area = top1['平均面积']
+                            insights.append(f"🏠 该小区平均面积为 **{avg_area:.1f}㎡**，属于{'大户型' if avg_area > 100 else '中等户型' if avg_area > 70 else '小户型'}定位")
+                        
+                        elif ranking_metric == "成交周期" and not pd.isna(top1_value):
+                            insights.append(f"🥇 **{top1['小区名称']}** 以 **{top1_value:.0f}天** 的成交周期位居榜首，是最容易成交的小区")
+                            if top1_value <= 30:
+                                insights.append("⚡ 成交周期在30天以内，属于快速成交，说明房源非常抢手")
+                            elif top1_value <= 60:
+                                insights.append("✅ 成交周期在60天以内，属于正常成交速度")
+                    
+                    # 显示洞察
+                    for insight in insights:
+                        st.markdown(insight)
+                    
+                else:
+                    st.warning("没有足够的小区数据进行排行榜分析（需要至少3套成交记录）")
+                    
+            except Exception as e:
+                st.error(f"小区排行榜分析出现错误: {str(e)}")
+
         # --- 详细数据表格 ---
         st.markdown("---")
         st.header("📋 详细数据查看")
@@ -869,14 +1144,14 @@ if uploaded_files:
             available_columns = [col for col in key_columns if col in filtered_df.columns]
             st.dataframe(filtered_df[available_columns].head(rows_to_show), use_container_width=True)
 
-        # --- 专业洞察报告 ---
+        # --- 洞察报告 ---
         st.markdown("---")
-        st.header("🎯 专业市场洞察")
+        st.header("🎯 市场洞察")
         
         insights_col1, insights_col2 = st.columns(2)
         
         with insights_col1:
-            st.subheader("📊 专业市场洞察")
+            st.subheader("📊 市场洞察")
             
             insights = []
             
@@ -988,13 +1263,13 @@ if uploaded_files:
                 st.write(insight)
         
         with insights_col2:
-            st.subheader("💡 专业投资建议")
+            st.subheader("💡 投资建议")
             
             recommendations = []
             
             # 基于筛选条件的投资建议
             if active_filters:
-                recommendations.append("🔹 基于当前筛选条件的专业建议：")
+                recommendations.append("🔹 基于当前筛选条件的建议：")
                 
                 # 户型筛选建议
                 if '户型' in df.columns and 'selected_room_types' in locals():
