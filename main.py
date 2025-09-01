@@ -18,6 +18,246 @@ st.set_page_config(
 )
 
 # --- 辅助函数 ---
+def read_data_file(file):
+    """读取数据文件，支持CSV和Excel格式"""
+    try:
+        file_name = file.name.lower()
+        
+        if file_name.endswith('.csv'):
+            # 尝试不同的编码格式读取CSV
+            try:
+                df = pd.read_csv(file, encoding='utf-8')
+            except UnicodeDecodeError:
+                try:
+                    df = pd.read_csv(file, encoding='gbk')
+                except UnicodeDecodeError:
+                    try:
+                        df = pd.read_csv(file, encoding='utf-8-sig')
+                    except UnicodeDecodeError:
+                        df = pd.read_csv(file, encoding='latin-1')
+        
+        elif file_name.endswith(('.xlsx', '.xls')):
+            # 读取Excel文件
+            engine = 'openpyxl' if file_name.endswith('.xlsx') else 'xlrd'
+            
+            # 首先检查工作表
+            try:
+                excel_file = pd.ExcelFile(file, engine=engine)
+                sheet_names = excel_file.sheet_names
+                
+                # 如果有多个工作表，默认读取第一个，但可以在侧边栏选择
+                if len(sheet_names) > 1:
+                    st.sidebar.info(f"📊 {file.name} 包含 {len(sheet_names)} 个工作表")
+                    # 这里可以扩展为让用户选择工作表，暂时使用第一个
+                    selected_sheet = sheet_names[0]
+                else:
+                    selected_sheet = sheet_names[0] if sheet_names else 0
+                
+                df = pd.read_excel(file, sheet_name=selected_sheet, engine=engine)
+                
+            except Exception as e:
+                # 如果读取失败，尝试默认方式
+                df = pd.read_excel(file, engine=engine)
+        
+        else:
+            st.error(f"不支持的文件格式: {file_name}")
+            return None
+        
+        # 基本数据清理
+        if df is not None:
+            # 删除完全空白的行和列
+            df = df.dropna(how='all').dropna(axis=1, how='all')
+            
+            # 如果第一行看起来像标题行，确保它被用作列名
+            if df.columns.dtype == 'object' and any(df.columns.str.contains('Unnamed', na=False)):
+                # 可能需要重新设置列名
+                if not df.iloc[0].isna().all():
+                    df.columns = df.iloc[0]
+                    df = df.drop(df.index[0]).reset_index(drop=True)
+        
+        return df
+    
+    except Exception as e:
+        st.error(f"读取文件 {file.name} 时出错: {str(e)}")
+        st.error("请确保文件格式正确，且包含有效的数据")
+        return None
+
+def standardize_column_names(df, data_type):
+    """智能标准化列名"""
+    if df is None or df.empty:
+        return df
+    
+    # 创建列名映射字典
+    column_mappings = {}
+    
+    if data_type == '在售房源':
+        # 在售房源的列名映射规则
+        mapping_rules = {
+            '小区名称': ['小区', '楼盘', '项目名称', '楼盘名称', '小区名', '项目'],
+            '面积(㎡)': ['建筑面积(㎡)', '建筑面积', '面积', '房屋面积', '建面', '建筑面积（㎡）', '建筑面积(平米)', '面积(平米)'],
+            '总价(万)': ['总价(万)', '总价', '房屋总价', '总价（万）', '总价(万元)', '价格(万)', '售价(万)'],
+            '单价(元/平)': ['单价(元/平)', '单价', '房屋单价', '单价（元/平）', '单价(元/㎡)', '单价元/平', '均价'],
+            '建成年代': ['年代', '建成年份', '建造年代', '房龄', '建筑年代', '竣工年份'],
+            '小区名称': ['小区', '楼盘', '项目名称', '楼盘名称', '小区名', '项目'],
+            '户型': ['户型', '房型', '房间格局', '格局'],
+            '朝向': ['朝向', '房屋朝向', '方向'],
+            '楼层': ['楼层', '楼层信息', '所在楼层', '层数'],
+            '装修': ['装修', '装修情况', '装修状况', '装修程度'],
+            '关注人数': ['关注人数', '关注数', '浏览量', '关注量']
+        }
+    else:
+        # 成交房源的列名映射规则
+        mapping_rules = {
+            '总价(万)': ['成交总价(万)', '成交价格(万)', '成交总价', '总价(万)', '总价', '成交价(万)'],
+            '单价(元/平)': ['成交单价(元/平)', '成交单价', '单价(元/平)', '单价', '成交均价'],
+            '成交日期': ['成交日期', '成交时间', '交易日期', '签约日期'],
+            '成交周期(天)': ['成交周期(天)', '成交周期', '交易周期', '销售周期'],
+            '挂牌价(万)': ['挂牌价(万)', '挂牌价', '原价(万)', '标价(万)'],
+            '面积(㎡)': ['建筑面积(㎡)', '建筑面积', '面积', '房屋面积', '建面'],
+            '小区名称': ['小区', '楼盘', '项目名称', '楼盘名称', '小区名', '项目'],
+            '户型': ['户型', '房型', '房间格局', '格局'],
+        }
+    
+    # 执行列名映射
+    for standard_name, possible_names in mapping_rules.items():
+        for possible_name in possible_names:
+            if possible_name in df.columns and standard_name not in df.columns:
+                column_mappings[possible_name] = standard_name
+                break
+    
+    # 应用映射
+    if column_mappings:
+        df = df.rename(columns=column_mappings)
+        
+        # 在侧边栏显示映射信息
+        if column_mappings:
+            with st.sidebar.expander("🔄 列名标准化"):
+                for old_name, new_name in column_mappings.items():
+                    st.write(f"• {old_name} → {new_name}")
+    
+    return df
+
+def clean_and_validate_data(df, data_type):
+    """数据清洗和质量验证"""
+    quality_report = {
+        'original_rows': len(df),
+        'issues': [],
+        'cleaned_rows': 0,
+        'numeric_conversions': {},
+        'missing_data': {}
+    }
+    
+    if df is None or df.empty:
+        return df, quality_report
+    
+    # 删除完全空白的行
+    df_before = len(df)
+    df = df.dropna(how='all')
+    empty_rows_removed = df_before - len(df)
+    if empty_rows_removed > 0:
+        quality_report['issues'].append(f"删除了 {empty_rows_removed} 行空白数据")
+    
+    # 数值列处理
+    numeric_cols = ['总价(万)', '单价(元/平)', '面积(㎡)', '建成年代', '挂牌价(万)', '成交周期(天)', '关注人数']
+    
+    for col in numeric_cols:
+        if col in df.columns:
+            original_count = df[col].notna().sum()
+            
+            # 尝试转换为数值
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            converted_count = df[col].notna().sum()
+            missing_count = len(df) - converted_count
+            
+            quality_report['numeric_conversions'][col] = {
+                'original_valid': original_count,
+                'converted_valid': converted_count,
+                'missing': missing_count,
+                'missing_rate': missing_count / len(df) * 100
+            }
+            
+            # 数据范围验证
+            if col == '总价(万)' and converted_count > 0:
+                invalid_prices = df[(df[col] <= 0) | (df[col] > 50000)].index
+                if len(invalid_prices) > 0:
+                    df.loc[invalid_prices, col] = np.nan
+                    quality_report['issues'].append(f"{col}: 发现 {len(invalid_prices)} 个异常价格值")
+            
+            elif col == '单价(元/平)' and converted_count > 0:
+                invalid_unit_prices = df[(df[col] <= 0) | (df[col] > 500000)].index
+                if len(invalid_unit_prices) > 0:
+                    df.loc[invalid_unit_prices, col] = np.nan
+                    quality_report['issues'].append(f"{col}: 发现 {len(invalid_unit_prices)} 个异常单价值")
+            
+            elif col == '面积(㎡)' and converted_count > 0:
+                invalid_areas = df[(df[col] <= 0) | (df[col] > 1000)].index
+                if len(invalid_areas) > 0:
+                    df.loc[invalid_areas, col] = np.nan
+                    quality_report['issues'].append(f"{col}: 发现 {len(invalid_areas)} 个异常面积值")
+            
+            elif col == '建成年代' and converted_count > 0:
+                current_year = datetime.now().year
+                invalid_years = df[(df[col] < 1900) | (df[col] > current_year)].index
+                if len(invalid_years) > 0:
+                    df.loc[invalid_years, col] = np.nan
+                    quality_report['issues'].append(f"{col}: 发现 {len(invalid_years)} 个异常年代值")
+    
+    # 文本列清理
+    text_cols = ['小区名称', '户型', '朝向', '楼层', '装修']
+    for col in text_cols:
+        if col in df.columns:
+            # 去除前后空格
+            df[col] = df[col].astype(str).str.strip()
+            # 替换空字符串为NaN
+            df[col] = df[col].replace('', np.nan)
+            df[col] = df[col].replace('nan', np.nan)
+    
+    # 计算最终数据质量
+    quality_report['cleaned_rows'] = len(df)
+    quality_report['data_completeness'] = {}
+    
+    key_columns = ['小区名称', '总价(万)', '单价(元/平)', '面积(㎡)']
+    for col in key_columns:
+        if col in df.columns:
+            completeness = df[col].notna().sum() / len(df) * 100
+            quality_report['data_completeness'][col] = completeness
+    
+    return df, quality_report
+
+def display_data_quality_report(quality_report):
+    """显示数据质量报告"""
+    st.sidebar.subheader("📊 数据质量报告")
+    
+    # 基本统计
+    st.sidebar.metric("原始数据行数", quality_report['original_rows'])
+    st.sidebar.metric("清洗后行数", quality_report['cleaned_rows'])
+    
+    # 数据完整性
+    if quality_report['data_completeness']:
+        st.sidebar.write("**关键字段完整性:**")
+        for col, completeness in quality_report['data_completeness'].items():
+            color = "green" if completeness > 90 else "orange" if completeness > 70 else "red"
+            st.sidebar.markdown(f"• {col}: :{color}[{completeness:.1f}%]")
+    
+    # 数据问题
+    if quality_report['issues']:
+        st.sidebar.write("**发现的问题:**")
+        for issue in quality_report['issues']:
+            st.sidebar.warning(f"⚠️ {issue}")
+    
+    # 数值转换详情
+    if quality_report['numeric_conversions']:
+        with st.sidebar.expander("🔢 数值转换详情"):
+            for col, stats in quality_report['numeric_conversions'].items():
+                if stats['missing_rate'] > 0:
+                    st.write(f"**{col}:**")
+                    st.write(f"  • 有效数据: {stats['converted_valid']} 行")
+                    st.write(f"  • 缺失数据: {stats['missing']} 行 ({stats['missing_rate']:.1f}%)")
+    
+    if not quality_report['issues']:
+        st.sidebar.success("✅ 数据质量良好")
+
 def calculate_price_per_sqm_stats(df, price_col, area_col):
     """计算单价统计信息"""
     if price_col in df.columns and area_col in df.columns:
@@ -99,6 +339,483 @@ def analyze_market_segments(df, price_col, area_col):
             segments['data'] = valid_data
     return segments
 
+def analyze_property_competitiveness(selected_property, all_properties):
+    """分析房源竞争力"""
+    analysis = {}
+    
+    # 1. 筛选竞争对手
+    competitors = filter_competitors(selected_property, all_properties)
+    analysis['competitors'] = competitors
+    analysis['total_competitors'] = len(competitors)
+    
+    # 2. 价格竞争力分析
+    analysis['price_analysis'] = analyze_price_competitiveness(selected_property, competitors)
+    
+    # 3. 面积性价比分析
+    analysis['area_analysis'] = analyze_area_competitiveness(selected_property, competitors)
+    
+    # 4. 关注度分析
+    analysis['attention_analysis'] = analyze_attention_competitiveness(selected_property, competitors)
+    
+    # 5. 房源特色分析
+    analysis['feature_analysis'] = analyze_feature_competitiveness(selected_property, competitors)
+    
+    # 6. 综合竞争力评分
+    analysis['overall_score'] = calculate_overall_competitiveness(analysis)
+    
+    return analysis
+
+def filter_competitors(selected_property, all_properties):
+    """筛选竞争对手房源"""
+    # 排除自己
+    competitors = all_properties[all_properties.index != selected_property.name].copy()
+    
+    # 筛选条件：同户型或相近面积
+    target_area = selected_property['建筑面积(㎡)']
+    target_rooms = selected_property['户型']
+    
+    # 面积范围：±20%
+    area_range = target_area * 0.2
+    area_filter = (competitors['建筑面积(㎡)'] >= target_area - area_range) & \
+                  (competitors['建筑面积(㎡)'] <= target_area + area_range)
+    
+    # 户型匹配或面积相近
+    room_filter = competitors['户型'] == target_rooms
+    
+    # 组合筛选：同户型优先，否则选择面积相近的
+    same_room_competitors = competitors[room_filter]
+    similar_area_competitors = competitors[area_filter & ~room_filter]
+    
+    # 合并结果，同户型的排在前面
+    final_competitors = pd.concat([same_room_competitors, similar_area_competitors]).drop_duplicates()
+    
+    return final_competitors
+
+def analyze_price_competitiveness(selected_property, competitors):
+    """分析价格竞争力"""
+    if len(competitors) == 0:
+        return {"rank": "无竞争对手", "percentile": 100}
+    
+    target_price = selected_property['单价(元/平)']
+    competitor_prices = competitors['单价(元/平)'].dropna()
+    
+    if len(competitor_prices) == 0:
+        return {"rank": "无价格数据", "percentile": 50}
+    
+    # 计算价格排名（价格越低排名越好）
+    lower_count = len(competitor_prices[competitor_prices > target_price])
+    total_count = len(competitor_prices) + 1  # 包括自己
+    percentile = (lower_count + 1) / total_count * 100
+    
+    avg_price = competitor_prices.mean()
+    median_price = competitor_prices.median()
+    
+    return {
+        "target_price": target_price,
+        "avg_competitor_price": avg_price,
+        "median_competitor_price": median_price,
+        "price_advantage": avg_price - target_price,
+        "percentile": percentile,
+        "rank": f"{lower_count + 1}/{total_count}"
+    }
+
+def analyze_area_competitiveness(selected_property, competitors):
+    """分析面积性价比竞争力"""
+    if len(competitors) == 0:
+        return {"rank": "无竞争对手"}
+    
+    target_area = selected_property['建筑面积(㎡)']
+    target_total_price = selected_property['总价(万)']
+    
+    competitor_data = competitors.dropna(subset=['建筑面积(㎡)', '总价(万)'])
+    
+    if len(competitor_data) == 0:
+        return {"rank": "无面积数据"}
+    
+    # 计算性价比：面积/总价
+    target_value_ratio = target_area / target_total_price
+    competitor_ratios = competitor_data['建筑面积(㎡)'] / competitor_data['总价(万)']
+    
+    # 排名（性价比越高排名越好）
+    better_count = len(competitor_ratios[competitor_ratios < target_value_ratio])
+    total_count = len(competitor_ratios) + 1
+    percentile = (better_count + 1) / total_count * 100
+    
+    return {
+        "target_ratio": target_value_ratio,
+        "avg_competitor_ratio": competitor_ratios.mean(),
+        "percentile": percentile,
+        "rank": f"{better_count + 1}/{total_count}"
+    }
+
+def analyze_attention_competitiveness(selected_property, competitors):
+    """分析关注度竞争力"""
+    if len(competitors) == 0 or '关注人数' not in competitors.columns:
+        return {"rank": "无关注度数据"}
+    
+    target_attention = selected_property['关注人数']
+    competitor_attention = competitors['关注人数'].dropna()
+    
+    if len(competitor_attention) == 0:
+        return {"rank": "无关注度数据"}
+    
+    # 排名（关注度越高排名越好）
+    lower_count = len(competitor_attention[competitor_attention < target_attention])
+    total_count = len(competitor_attention) + 1
+    percentile = (lower_count + 1) / total_count * 100
+    
+    return {
+        "target_attention": target_attention,
+        "avg_competitor_attention": competitor_attention.mean(),
+        "median_competitor_attention": competitor_attention.median(),
+        "percentile": percentile,
+        "rank": f"{lower_count + 1}/{total_count}"
+    }
+
+def analyze_feature_competitiveness(selected_property, competitors):
+    """分析房源特色竞争力"""
+    features = {}
+    
+    # 朝向分析
+    if '朝向' in selected_property:
+        target_orientation = selected_property['朝向']
+        south_facing = '南' in str(target_orientation)
+        features['south_facing'] = south_facing
+        
+        if len(competitors) > 0 and '朝向' in competitors.columns:
+            competitor_south = competitors['朝向'].apply(lambda x: '南' in str(x) if pd.notna(x) else False)
+            south_ratio = competitor_south.mean() * 100
+            features['south_facing_advantage'] = south_facing and south_ratio < 50
+    
+    # 楼层分析
+    if '楼层' in selected_property:
+        target_floor = selected_property['楼层']
+        is_high_floor = '高楼层' in str(target_floor)
+        is_low_floor = '低楼层' in str(target_floor)
+        features['floor_type'] = target_floor
+        features['is_high_floor'] = is_high_floor
+        features['is_low_floor'] = is_low_floor
+    
+    # 房源标签分析
+    if '房源标签' in selected_property and pd.notna(selected_property['房源标签']):
+        tags = str(selected_property['房源标签']).split('|')
+        features['tags'] = [tag.strip() for tag in tags]
+        features['has_metro'] = any('地铁' in tag for tag in tags)
+        features['has_vr'] = any('VR' in tag for tag in tags)
+        features['tax_advantage'] = any('满五' in tag for tag in tags)
+    
+    return features
+
+def calculate_overall_competitiveness(analysis):
+    """计算综合竞争力评分"""
+    scores = []
+    weights = []
+    
+    # 价格竞争力 (权重: 30%)
+    if 'percentile' in analysis['price_analysis']:
+        price_score = 100 - analysis['price_analysis']['percentile']  # 价格越低分数越高
+        scores.append(price_score)
+        weights.append(0.3)
+    
+    # 面积性价比 (权重: 25%)
+    if 'percentile' in analysis['area_analysis']:
+        area_score = analysis['area_analysis']['percentile']  # 性价比越高分数越高
+        scores.append(area_score)
+        weights.append(0.25)
+    
+    # 关注度 (权重: 20%)
+    if 'percentile' in analysis['attention_analysis']:
+        attention_score = analysis['attention_analysis']['percentile']
+        scores.append(attention_score)
+        weights.append(0.2)
+    
+    # 特色加分 (权重: 25%)
+    feature_score = 50  # 基础分
+    features = analysis['feature_analysis']
+    
+    if features.get('south_facing', False):
+        feature_score += 15
+    if features.get('has_metro', False):
+        feature_score += 10
+    if features.get('tax_advantage', False):
+        feature_score += 10
+    if features.get('has_vr', False):
+        feature_score += 5
+    if features.get('is_high_floor', False):
+        feature_score += 10
+    
+    feature_score = min(feature_score, 100)  # 最高100分
+    scores.append(feature_score)
+    weights.append(0.25)
+    
+    # 计算加权平均分
+    if scores:
+        overall_score = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+        return round(overall_score, 1)
+    
+    return 50.0
+
+def display_competitiveness_analysis(analysis, selected_property):
+    """显示竞争力分析结果"""
+    
+    # 综合评分展示
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        score = analysis['overall_score']
+        if score >= 80:
+            score_color = "green"
+            score_level = "优秀"
+            score_icon = "🏆"
+        elif score >= 65:
+            score_color = "blue"
+            score_level = "良好"
+            score_icon = "👍"
+        elif score >= 50:
+            score_color = "orange"
+            score_level = "一般"
+            score_icon = "⚖️"
+        else:
+            score_color = "red"
+            score_level = "较弱"
+            score_icon = "⚠️"
+        
+        st.markdown(f"### {score_icon} 综合竞争力评分")
+        st.markdown(f"## :{score_color}[{score}分] - {score_level}")
+    
+    with col2:
+        st.metric("🏠 竞争对手数量", f"{analysis['total_competitors']}套")
+    
+    with col3:
+        if analysis['total_competitors'] > 0:
+            market_position = "激烈竞争" if analysis['total_competitors'] > 10 else "适度竞争" if analysis['total_competitors'] > 5 else "竞争较少"
+            st.metric("📊 市场竞争", market_position)
+    
+    # 详细分析
+    st.subheader("📊 详细竞争力分析")
+    
+    # 创建四个分析维度的标签页
+    tab1, tab2, tab3, tab4 = st.tabs(["💰 价格竞争力", "📐 面积性价比", "👥 市场关注度", "⭐ 房源特色"])
+    
+    with tab1:
+        price_analysis = analysis['price_analysis']
+        if 'percentile' in price_analysis:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("🏷️ 价格排名", price_analysis['rank'])
+                st.metric("📊 价格百分位", f"{price_analysis['percentile']:.1f}%")
+                
+                if price_analysis['price_advantage'] > 0:
+                    st.success(f"💰 价格优势：比均价低 {price_analysis['price_advantage']:,.0f} 元/㎡")
+                else:
+                    st.warning(f"💸 价格劣势：比均价高 {abs(price_analysis['price_advantage']):,.0f} 元/㎡")
+            
+            with col2:
+                # 价格对比图
+                fig_price = go.Figure()
+                
+                fig_price.add_trace(go.Bar(
+                    x=['目标房源', '竞争对手均价', '竞争对手中位价'],
+                    y=[price_analysis['target_price'], 
+                       price_analysis['avg_competitor_price'], 
+                       price_analysis['median_competitor_price']],
+                    marker_color=['red', 'blue', 'green'],
+                    text=[f"{x:,.0f}" for x in [price_analysis['target_price'], 
+                                               price_analysis['avg_competitor_price'], 
+                                               price_analysis['median_competitor_price']]],
+                    textposition='auto'
+                ))
+                
+                fig_price.update_layout(
+                    title="单价对比分析",
+                    yaxis_title="单价 (元/㎡)",
+                    height=300
+                )
+                
+                st.plotly_chart(fig_price, use_container_width=True)
+    
+    with tab2:
+        area_analysis = analysis['area_analysis']
+        if 'percentile' in area_analysis:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("📐 性价比排名", area_analysis['rank'])
+                st.metric("📊 性价比百分位", f"{area_analysis['percentile']:.1f}%")
+                
+                ratio_advantage = area_analysis['target_ratio'] - area_analysis['avg_competitor_ratio']
+                if ratio_advantage > 0:
+                    st.success(f"🎯 性价比优势：每万元多 {ratio_advantage:.2f} ㎡")
+                else:
+                    st.warning(f"📉 性价比劣势：每万元少 {abs(ratio_advantage):.2f} ㎡")
+            
+            with col2:
+                # 性价比对比
+                fig_ratio = go.Figure()
+                
+                fig_ratio.add_trace(go.Bar(
+                    x=['目标房源', '竞争对手均值'],
+                    y=[area_analysis['target_ratio'], area_analysis['avg_competitor_ratio']],
+                    marker_color=['red', 'blue'],
+                    text=[f"{x:.2f}" for x in [area_analysis['target_ratio'], area_analysis['avg_competitor_ratio']]],
+                    textposition='auto'
+                ))
+                
+                fig_ratio.update_layout(
+                    title="面积性价比对比 (㎡/万元)",
+                    yaxis_title="性价比 (㎡/万元)",
+                    height=300
+                )
+                
+                st.plotly_chart(fig_ratio, use_container_width=True)
+    
+    with tab3:
+        attention_analysis = analysis['attention_analysis']
+        if 'percentile' in attention_analysis:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("👥 关注度排名", attention_analysis['rank'])
+                st.metric("📊 关注度百分位", f"{attention_analysis['percentile']:.1f}%")
+                
+                attention_advantage = attention_analysis['target_attention'] - attention_analysis['avg_competitor_attention']
+                if attention_advantage > 0:
+                    st.success(f"🔥 关注度优势：比均值高 {attention_advantage:.0f} 人")
+                else:
+                    st.info(f"📊 关注度：比均值低 {abs(attention_advantage):.0f} 人")
+            
+            with col2:
+                # 关注度对比
+                fig_attention = go.Figure()
+                
+                fig_attention.add_trace(go.Bar(
+                    x=['目标房源', '竞争对手均值', '竞争对手中位数'],
+                    y=[attention_analysis['target_attention'], 
+                       attention_analysis['avg_competitor_attention'], 
+                       attention_analysis['median_competitor_attention']],
+                    marker_color=['red', 'blue', 'green'],
+                    text=[f"{x:.0f}" for x in [attention_analysis['target_attention'], 
+                                              attention_analysis['avg_competitor_attention'], 
+                                              attention_analysis['median_competitor_attention']]],
+                    textposition='auto'
+                ))
+                
+                fig_attention.update_layout(
+                    title="关注度对比分析",
+                    yaxis_title="关注人数",
+                    height=300
+                )
+                
+                st.plotly_chart(fig_attention, use_container_width=True)
+    
+    with tab4:
+        features = analysis['feature_analysis']
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🏠 房源特色")
+            
+            # 朝向优势
+            if features.get('south_facing', False):
+                st.success("🌞 朝向优势：南向采光好")
+            else:
+                st.info(f"🧭 朝向：{selected_property.get('朝向', '未知')}")
+            
+            # 楼层特点
+            if features.get('is_high_floor', False):
+                st.success("🏢 楼层优势：高楼层视野好")
+            elif features.get('is_low_floor', False):
+                st.info("🏢 楼层特点：低楼层出行便利")
+            else:
+                st.info(f"🏢 楼层：{selected_property.get('楼层', '未知')}")
+        
+        with col2:
+            st.subheader("🏷️ 房源标签优势")
+            
+            if 'tags' in features:
+                for tag in features['tags']:
+                    if '地铁' in tag:
+                        st.success(f"🚇 {tag}")
+                    elif 'VR' in tag:
+                        st.info(f"📱 {tag}")
+                    elif '满五' in tag:
+                        st.success(f"💰 {tag}")
+                    else:
+                        st.info(f"🏷️ {tag}")
+            else:
+                st.info("暂无特殊标签")
+    
+    # 竞争对手列表
+    if analysis['total_competitors'] > 0:
+        st.subheader("🏘️ 主要竞争对手")
+        
+        competitors = analysis['competitors']
+        
+        # 选择显示的竞争对手数量
+        display_count = min(10, len(competitors))
+        top_competitors = competitors.head(display_count)
+        
+        # 创建对比表格
+        comparison_data = []
+        for idx, competitor in top_competitors.iterrows():
+            comparison_data.append({
+                '小区': competitor['小区'],
+                '户型': competitor['户型'],
+                '面积(㎡)': competitor['建筑面积(㎡)'],
+                '总价(万)': competitor['总价(万)'],
+                '单价(元/㎡)': f"{competitor['单价(元/平)']:,.0f}",
+                '朝向': competitor['朝向'],
+                '楼层': competitor['楼层'],
+                '关注人数': competitor['关注人数']
+            })
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        st.dataframe(comparison_df, use_container_width=True)
+        
+        # 投资建议
+        st.subheader("💡 投资建议")
+        
+        recommendations = []
+        
+        # 基于综合评分的建议
+        if score >= 80:
+            recommendations.append("🏆 **优秀房源**：综合竞争力强，建议优先考虑")
+        elif score >= 65:
+            recommendations.append("👍 **良好选择**：各方面表现均衡，值得考虑")
+        elif score >= 50:
+            recommendations.append("⚖️ **谨慎考虑**：存在一定劣势，需要综合评估")
+        else:
+            recommendations.append("⚠️ **需要谨慎**：竞争力较弱，建议寻找更好选择")
+        
+        # 基于价格的建议
+        price_analysis = analysis['price_analysis']
+        if 'price_advantage' in price_analysis:
+            if price_analysis['price_advantage'] > 5000:
+                recommendations.append("💰 **价格优势明显**：单价比同类房源低，性价比高")
+            elif price_analysis['price_advantage'] < -5000:
+                recommendations.append("💸 **价格偏高**：建议与业主协商降价空间")
+        
+        # 基于关注度的建议
+        attention_analysis = analysis['attention_analysis']
+        if 'percentile' in attention_analysis:
+            if attention_analysis['percentile'] > 80:
+                recommendations.append("🔥 **市场热门**：关注度高，需要快速决策")
+            elif attention_analysis['percentile'] < 20:
+                recommendations.append("🤔 **关注度低**：可能存在隐藏问题，需要仔细调研")
+        
+        # 基于特色的建议
+        features = analysis['feature_analysis']
+        if features.get('south_facing', False) and features.get('has_metro', False):
+            recommendations.append("⭐ **地段优势**：南向+地铁，居住和投资价值都很好")
+        
+        if features.get('tax_advantage', False):
+            recommendations.append("💰 **税费优势**：满五年，交易成本低")
+        
+        for rec in recommendations:
+            st.write(rec)
+
 # --- 侧边栏控制面板 ---
 st.sidebar.title("🏢 房产市场分析控制台")
 st.sidebar.markdown("---")
@@ -112,46 +829,60 @@ data_type = st.sidebar.radio(
 
 # 文件上传
 uploaded_files = st.sidebar.file_uploader(
-    f"📁 上传「{data_type}」CSV文件",
-    type=['csv'],
+    f"📁 上传「{data_type}」数据文件",
+    type=['csv', 'xlsx', 'xls'],
     accept_multiple_files=True,
-    help="支持上传多个CSV文件，系统将自动合并分析"
+    help="支持上传多个CSV或Excel文件，系统将自动合并分析"
 )
 
 # --- 数据加载与处理 ---
 if uploaded_files:
     try:
-        # 读取所有上传的CSV文件并合并
-        df_list = [pd.read_csv(file) for file in uploaded_files]
+        # 读取所有上传的数据文件并合并
+        df_list = []
+        file_info = []
+        
+        for file in uploaded_files:
+            df_temp = read_data_file(file)
+            if df_temp is not None:
+                df_list.append(df_temp)
+                file_info.append({
+                    'name': file.name,
+                    'rows': len(df_temp),
+                    'format': file.name.split('.')[-1].upper()
+                })
+        
+        if not df_list:
+            st.error("没有成功读取任何文件，请检查文件格式")
+            st.stop()
+        
         df = pd.concat(df_list, ignore_index=True)
         
-        # 数据标准化处理
-        if data_type == '在售房源':
-            column_mapping = {
-                '小区': '小区名称',
-                '建筑面积(㎡)': '面积(㎡)',
-                '总价(万)': '总价(万)',
-                '单价(元/平)': '单价(元/平)',
-                '年代': '建成年代'
-            }
+        # 显示文件读取信息
+        if len(file_info) > 1:
+            st.sidebar.success(f"✅ 成功读取 {len(file_info)} 个文件")
+            with st.sidebar.expander("📄 文件详情"):
+                for info in file_info:
+                    st.write(f"• {info['name']} ({info['format']}) - {info['rows']} 行")
         else:
-            column_mapping = {
-                '成交总价(万)': '总价(万)',
-                '成交单价(元/平)': '单价(元/平)'
-            }
+            st.sidebar.success(f"✅ 成功读取文件: {file_info[0]['name']}")
         
-        # 应用列名映射
-        for old_name, new_name in column_mapping.items():
-            if old_name in df.columns:
-                df[new_name] = df[old_name]
-
-        # 数据清洗
-        numeric_cols = ['总价(万)', '单价(元/平)', '面积(㎡)', '建成年代', '挂牌价(万)', '成交周期(天)', '关注人数']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        # 数据预览选项
+        if st.sidebar.checkbox("👀 数据预览", help="查看原始数据的前几行"):
+            st.sidebar.subheader("📋 数据预览")
+            preview_rows = st.sidebar.slider("预览行数", 1, 10, 3)
+            st.sidebar.dataframe(df.head(preview_rows), use_container_width=True)
+            st.sidebar.caption(f"数据形状: {df.shape[0]} 行 × {df.shape[1]} 列")
         
-        df.dropna(how='all', inplace=True)
+        # 智能列名标准化处理
+        df = standardize_column_names(df, data_type)
+        
+        # 数据质量检查和清洗
+        df, quality_report = clean_and_validate_data(df, data_type)
+        
+        # 显示数据质量报告
+        if quality_report and st.sidebar.checkbox("📊 数据质量报告"):
+            display_data_quality_report(quality_report)
 
         # --- 主页面标题 ---
         st.title("🏢 房产市场数据分析报告")
@@ -1109,6 +1840,63 @@ if uploaded_files:
                     
             except Exception as e:
                 st.error(f"小区排行榜分析出现错误: {str(e)}")
+
+        # --- 房源竞争力分析 ---
+        if data_type == '在售房源':
+            st.markdown("---")
+            st.header("🎯 房源竞争力分析")
+            
+            # 房源选择器
+            st.subheader("🏠 选择目标房源")
+            
+            # 创建房源选择的显示格式
+            def format_property_display(row):
+                return f"{row['小区']} | {row['户型']} | {row['建筑面积(㎡)']}㎡ | {row['总价(万)']}万 | {row['单价(元/平)']:,.0f}元/㎡"
+            
+            # 为每个房源创建唯一标识
+            filtered_df['房源显示'] = filtered_df.apply(format_property_display, axis=1)
+            filtered_df['房源ID'] = range(len(filtered_df))
+            
+            # 房源选择下拉框
+            selected_property_idx = st.selectbox(
+                "选择要分析的房源：",
+                options=filtered_df['房源ID'].tolist(),
+                format_func=lambda x: filtered_df.loc[filtered_df['房源ID'] == x, '房源显示'].iloc[0],
+                help="选择一套房源进行竞争力分析"
+            )
+            
+            if selected_property_idx is not None:
+                selected_property = filtered_df[filtered_df['房源ID'] == selected_property_idx].iloc[0]
+                
+                # 显示选中房源的详细信息
+                st.subheader("📋 目标房源信息")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("🏢 小区", selected_property['小区'])
+                    st.metric("🏠 户型", selected_property['户型'])
+                with col2:
+                    st.metric("💰 总价", f"{selected_property['总价(万)']}万")
+                    st.metric("🏷️ 单价", f"{selected_property['单价(元/平)']:,.0f}元/㎡")
+                with col3:
+                    st.metric("📐 面积", f"{selected_property['建筑面积(㎡)']}㎡")
+                    st.metric("🧭 朝向", selected_property['朝向'])
+                with col4:
+                    st.metric("🏢 楼层", selected_property['楼层'])
+                    st.metric("👥 关注度", f"{selected_property['关注人数']}人")
+                
+                # 房源标签展示
+                if '房源标签' in selected_property and pd.notna(selected_property['房源标签']):
+                    st.write("🏷️ **房源标签：**", selected_property['房源标签'])
+                
+                # 竞争力分析
+                st.subheader("⚔️ 竞争力分析")
+                
+                # 定义竞争对手筛选条件
+                competitor_analysis = analyze_property_competitiveness(selected_property, filtered_df)
+                
+                # 显示竞争分析结果
+                display_competitiveness_analysis(competitor_analysis, selected_property)
 
         # --- 详细数据表格 ---
         st.markdown("---")
